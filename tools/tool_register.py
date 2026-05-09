@@ -1,7 +1,7 @@
 # register all agent tool here
 from typing import Any, Callable
 
-from tools import bash, execute_sql, http_request, read_file, write_file
+from tools import bash, http_request, read_file, update_short_memory, wait, write_file, execute_sql
 
 
 SYS_TOOL_PROMPT = """
@@ -17,11 +17,15 @@ machine:
 - execute_sql: run a single SQL statement against the agent's PostgreSQL
   database; each call is wrapped in a transaction that rolls back on
   failure. Apply LIMIT 100 to exploratory SELECTs.
+- update_short_memory: overwrite your short_memory.md scratchpad (kept under 3000 tokens).
+- wait: end this cycle and sleep until the next tick (no arguments).
 
 Use the narrowest tool that fits the task. Prefer read_file over bash for
 inspecting files, and prefer write_file over bash for creating files. Never
 run destructive shell commands (rm -rf, force pushes, dropping data, etc.)
-without explicit confirmation from the user.
+without explicit confirmation from the user. Persist context across cycles
+via update_short_memory. When you are done for this cycle, call wait so the
+runner can sleep until the next tick.
 """.strip()
 
 
@@ -31,6 +35,8 @@ TOOL_SPECS: list[dict[str, Any]] = [
     bash.SPEC,
     http_request.SPEC,
     execute_sql.SPEC,
+    update_short_memory.SPEC,
+    wait.SPEC,
 ]
 
 TOOL_HANDLERS: dict[str, Callable[..., str]] = {
@@ -39,6 +45,8 @@ TOOL_HANDLERS: dict[str, Callable[..., str]] = {
     bash.SPEC["name"]: bash.bash,
     http_request.SPEC["name"]: http_request.http_request,
     execute_sql.SPEC["name"]: execute_sql.execute_sql,
+    update_short_memory.SPEC["name"]: update_short_memory.update_short_memory,
+    wait.SPEC["name"]: wait.wait,
 }
 
 
