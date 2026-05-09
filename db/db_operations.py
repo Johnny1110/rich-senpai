@@ -16,7 +16,7 @@ from typing import Any
 import psycopg2
 from psycopg2 import pool as pg_pool
 
-from config import DB_CONFIG
+from db.config import DB_CONFIG
 
 
 _pool: pg_pool.ThreadedConnectionPool | None = None
