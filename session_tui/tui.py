@@ -22,17 +22,20 @@ Slash commands:
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
 from rich.console import Group
 from rich.markdown import Markdown
+from rich.padding import Padding
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.timer import Timer
-from textual.widgets import Footer, Header, Input, RichLog, Static
+from textual.widgets import Header, Input, RichLog, Static
 
 import json
 
@@ -48,6 +51,17 @@ _QUIT_ALIASES = frozenset({"/quit", "/exit", "exit", "quit", "!q"})
 # Braille spinner frames — 10 frames at 100ms = one revolution per second.
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _SPINNER_INTERVAL = 0.1
+
+# Palette — cyan is the primary brand for dialogue and chrome; gold marks
+# active / in-progress / notable mid-turn events (skill load, wait,
+# compact, drains, interrupt warnings); soft green marks completed
+# states; grey50 carries all execution metadata. Red is reserved strictly
+# for errors and exceptions.
+_BRAND = "cyan"
+_ACCENT = "bright_cyan"
+_GOLD = "gold1"
+_SUBTLE = "grey50"
+_OK = "green3"
 
 HELP_TEXT = """\
 [bold]commands[/]
@@ -77,6 +91,42 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n... [{len(text) - limit} more chars elided]"
+
+
+def _block(marker: str, marker_style: str, header: Text, body: Any | None = None) -> Group:
+    """Claude Code-style block: a marker glyph + header line, optional 2-space indented body."""
+    head = Text()
+    head.append(marker + "  ", style=marker_style)
+    head.append_text(header)
+    if body is None:
+        return Group(head)
+    return Group(head, Padding(body, (0, 0, 0, 3)))
+
+
+def _bar_line(head: Text, *, glyph: str, bar_style: str = _BRAND) -> Text:
+    """One-line tool-block row: `│ <glyph> <head>`. The `│` visually
+    encapsulates the tool call so its result rows can hang underneath."""
+    out = Text()
+    out.append("│ ", style=bar_style)
+    out.append(glyph + " ", style=bar_style)
+    out.append_text(head)
+    return out
+
+
+def _bar_block_body(text: str, *, glyph: str = "⎿", bar_style: str = _BRAND, body_style: str = "dim") -> Text:
+    """Multi-line tool-result body, each row prefixed by `│ ` so it
+    visually belongs to the parent command. The first row gets `glyph`,
+    every subsequent row gets a 2-space hanging indent under it."""
+    lines = text.splitlines() or [""]
+    out = Text()
+    out.append("│ ", style=bar_style)
+    out.append(glyph + " ", style=bar_style)
+    out.append(lines[0], style=body_style)
+    for line in lines[1:]:
+        out.append("\n")
+        out.append("│ ", style=bar_style)
+        out.append("  " + line, style=body_style)
+    return out
 
 
 class HistoryInput(Input):
@@ -142,38 +192,54 @@ class HistoryInput(Input):
 
 class SenpaiApp(App):
     CSS = """
+    Screen {
+        background: $surface;
+    }
     RichLog {
         height: 1fr;
-        border: round cyan;
-        padding: 0 1;
+        padding: 1 2;
+        background: transparent;
+        scrollbar-size: 0 0;
     }
     #status {
         height: 1;
-        padding: 0 1;
-        color: cyan;
+        padding: 0 2;
     }
     #todos {
         height: auto;
         max-height: 14;
-        padding: 0 1;
+        padding: 0 2;
     }
     #bg {
         height: auto;
         max-height: 12;
-        padding: 0 1;
+        padding: 0 2;
     }
     HistoryInput {
         dock: bottom;
-        margin: 0 0 0 0;
+        border: none;
+        border-top: solid #808080;
+        background: $surface;
+        padding: 0 1;
+    }
+    HistoryInput:focus {
+        border-top: solid cyan;
     }
     HistoryInput:disabled {
         opacity: 0.6;
+    }
+    Header {
+        background: $surface;
+        color: cyan;
     }
     """
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+l", "clear_history", "Clear"),
+        # Esc cooperatively interrupts the current agent turn. Fires only
+        # when busy; idle Esc is harmless.
+        Binding("escape", "interrupt", "Interrupt", show=False),
     ]
 
     TITLE = "rich-senpai"
@@ -216,7 +282,72 @@ class SenpaiApp(App):
         client = self.agent.llm
         provider = type(client).__name__.replace("LLMClient", "").lower() or "llm"
         model = getattr(client, "model", None) or "?"
-        return f"{provider} · {model}"
+        return f"{provider} ({model})"
+
+    def _paint_welcome(self) -> None:
+        """Render the full-width intro panel into the log. Two columns:
+        greeting + capability list on the left, gold pyramid logo on the
+        right. Called from on_mount and from /clear so a freshly reset
+        screen still shows the brand + bindings."""
+        greeting = Text()
+        greeting.append("welcome back  ·  ", style=f"bold {_ACCENT}")
+        greeting.append("ready when you are!\n\n", style=_ACCENT)
+        greeting.append(
+            "I am interactive trading agent - rich senpai \n\n"
+            "skills, tools, todos, teammates, and a persistent\n"
+            "short-memory scratchpad shared across sessions.\n\n",
+            style="white",
+        )
+        for bullet in (
+            "persistent short memory survives across turns",
+            "background tasks & inbox-driven coordination",
+        ):
+            greeting.append("  ⌁  ", style=_GOLD)
+            greeting.append(bullet + "\n", style="white")
+        greeting.append("\n")
+        greeting.append("model    · ", style="dim")
+        greeting.append(self._model_label + "\n", style=_SUBTLE)
+        greeting.append("session  · ", style="dim")
+        greeting.append(
+            datetime.now().strftime("%Y-%m-%d %H:%M"), style=_SUBTLE
+        )
+        greeting.append("\n\n")
+        greeting.append(
+            "/help  ·  /clear  ·  Esc to interrupt  ·  !q to exit",
+            style="dim",
+        )
+
+        # Pre-padded so every row has the apex at column 6 of 13 — keeps
+        # the pyramid centered no matter how its column is justified.
+        # Gradient: bright at the apex, dimming toward the base.
+        pyramid = Text()
+        for i, (line, style) in enumerate([
+            ("      ▲      ", f"bold {_GOLD}"),
+            ("     ▲▲▲     ", f"bold {_GOLD}"),
+            ("     ▲▲▲▲▲    ", _GOLD),
+            ("     ▲▲▲▲▲▲▲   ", _GOLD),
+            ("     ▲▲▲▲▲▲▲▲▲  ", "gold3"),
+            ("     ▲▲▲▲▲▲▲▲▲▲▲ ", "gold3"),
+        ]):
+            if i:
+                pyramid.append("\n")
+            pyramid.append(line, style=style)
+
+        grid = Table.grid(expand=True, padding=(0, 2))
+        grid.add_column(ratio=3)
+        grid.add_column(ratio=1, justify="center")
+        grid.add_row(greeting, pyramid)
+
+        self._write(
+            Panel(
+                grid,
+                title=f"[bold {_BRAND}]✻ rich-senpai[/]",
+                title_align="left",
+                border_style=_BRAND,
+                padding=(1, 2),
+            )
+        )
+        self._write(Text(""))
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -231,24 +362,14 @@ class SenpaiApp(App):
         # so it occupies a fixed 1-row band that's always visible.
         yield Static("", id="status")
         yield HistoryInput(
-            placeholder=">>> type a message · /help for commands · !q to exit",
+            placeholder="> type a message · /help · !q to exit",
             id="prompt",
             history_path=HISTORY_PATH,
         )
-        yield Footer()
 
     def on_mount(self) -> None:
         self.sub_title = self._model_label
-        self._write(
-            Panel(
-                Group(
-                    Text("rich-senpai · interactive trading agent", style="bold cyan"),
-                    Text(f"model: {self._model_label}", style="cyan"),
-                    Text("type /help for commands · Ctrl+Q to exit", style="dim"),
-                ),
-                border_style="cyan",
-            )
-        )
+        self._paint_welcome()
         self._refresh_todos()
         self._refresh_bg()
         # 1Hz tick keeps the bg panel honest as worker threads finish
@@ -270,7 +391,7 @@ class SenpaiApp(App):
         prompt.disabled = busy
         prompt.placeholder = (
             "agent is thinking…" if busy
-            else ">>> type a message · /help for commands"
+            else "> type a message · /help · !q to exit"
         )
         status = self.query_one("#status", Static)
         if busy:
@@ -296,11 +417,12 @@ class SenpaiApp(App):
         frame = _SPINNER_FRAMES[self._spin_idx]
         elapsed = time.monotonic() - self._busy_started_at
         line = Text.assemble(
-            (f" {frame}  ", "bold cyan"),
-            (self._status_label, "cyan"),
-            (f"  · iter {self._status_iter}", "dim"),
-            (f"  · {elapsed:4.1f}s", "dim"),
-            (f"  · {self._model_label}", "dim"),
+            (f"{frame}  ", f"bold {_BRAND}"),
+            (self._status_label, _BRAND),
+            (f"   iter {self._status_iter}", "dim"),
+            (f"   {elapsed:4.1f}s", "dim"),
+            (f"   {self._model_label}", "dim"),
+            ("   esc to interrupt", "dim"),
         )
         self.query_one("#status", Static).update(line)
 
@@ -323,14 +445,11 @@ class SenpaiApp(App):
         text = event["text"].strip()
         if not text:
             return
-        self._write(
-            Panel(
-                Markdown(text),
-                title=f"[bold cyan]senpai[/]  [dim]iter {event.get('iteration', 0)}[/]",
-                title_align="left",
-                border_style="cyan",
-            )
-        )
+        header = Text()
+        header.append("senpai", style=f"bold {_BRAND}")
+        header.append(f"   iter {event.get('iteration', 0)}", style="dim")
+        self._write(Text(""))  # breathing room above
+        self._write(_block("⏺", _BRAND, header, Markdown(text)))
 
     def _render_tool_use(self, event: dict[str, Any]) -> None:
         name = event.get("name")
@@ -345,17 +464,14 @@ class SenpaiApp(App):
             self._suppress(event.get("id"))
             return
         args = _format_tool_input(event.get("input") or {})
-        self._write(
-            Text.assemble(
-                ("→ ", "yellow"),
-                ("tool_use ", "bold yellow"),
-                (f"iter {event.get('iteration', 0)}  ", "dim"),
-                (name or "?", "bold"),
-                ("(", "dim"),
-                (args, ""),
-                (")", "dim"),
-            )
-        )
+        head = Text()
+        head.append(name or "?", style=f"bold {_BRAND}")
+        head.append("(", style="dim")
+        head.append(args, style="dim")
+        head.append(")", style="dim")
+        head.append(f"   iter {event.get('iteration', 0)}", style="dim")
+        self._write(Text(""))
+        self._write(_bar_line(head, glyph="⏺", bar_style=_BRAND))
 
     def _render_tool_result(self, event: dict[str, Any]) -> None:
         tu_id = event.get("id")
@@ -365,30 +481,23 @@ class SenpaiApp(App):
                 self._refresh_todos()
             return
         output = _truncate(event["output"], TOOL_RESULT_PREVIEW_CHARS)
-        self._write(
-            Panel(
-                Text(output, style="dim"),
-                title=f"[yellow]tool_result[/]  [dim]iter {event.get('iteration', 0)}[/]",
-                title_align="left",
-                border_style="yellow",
-            )
-        )
+        self._write(_bar_block_body(output, glyph="⎿", bar_style=_BRAND, body_style="dim"))
 
     def _render_wait(self, event: dict[str, Any]) -> None:
         self._write(
             Text.assemble(
-                ("⏸ ", "yellow"),
-                ("wait", "bold yellow"),
-                (f"  iter {event.get('iteration', 0)} — sleeping {event.get('seconds', '?')}s", "dim"),
+                ("⏸  ", _GOLD),
+                ("wait", f"bold {_GOLD}"),
+                (f"   iter {event.get('iteration', 0)} — sleeping {event.get('seconds', '?')}s", "dim"),
             )
         )
 
     def _render_compact(self, event: dict[str, Any]) -> None:
         self._write(
             Text.assemble(
-                ("⌁ ", "magenta"),
-                ("compact", "bold magenta"),
-                (f"  {event.get('reason', '')}", "dim"),
+                ("⌁  ", _GOLD),
+                ("compact", f"bold {_GOLD}"),
+                (f"   {event.get('reason', '')}", "dim"),
             )
         )
 
@@ -396,9 +505,9 @@ class SenpaiApp(App):
         n = len(event.get("notifications", []))
         self._write(
             Text.assemble(
-                ("◇ ", "cyan"),
-                ("background", "bold cyan"),
-                (f"  {n} notification(s) drained", "dim"),
+                ("◇  ", _GOLD),
+                ("background", f"bold {_GOLD}"),
+                (f"   {n} notification(s) drained", "dim"),
             )
         )
 
@@ -406,9 +515,20 @@ class SenpaiApp(App):
         n = len(event.get("messages", []))
         self._write(
             Text.assemble(
-                ("✉ ", "cyan"),
-                ("inbox", "bold cyan"),
-                (f"  {n} message(s) drained", "dim"),
+                ("✉  ", _GOLD),
+                ("inbox", f"bold {_GOLD}"),
+                (f"   {n} message(s) drained", "dim"),
+            )
+        )
+
+    def _render_interrupted(self, event: dict[str, Any]) -> None:
+        stage = event.get("stage", "")
+        suffix = f"   {stage}" if stage else ""
+        self._write(
+            Text.assemble(
+                ("⏼  ", _GOLD),
+                ("interrupted", f"bold {_GOLD}"),
+                (f"   iter {event.get('iteration', 0)}{suffix}", "dim"),
             )
         )
 
@@ -426,6 +546,7 @@ class SenpaiApp(App):
         "compact": _render_compact,
         "background_drain": _render_background_drain,
         "inbox_drain": _render_inbox_drain,
+        "interrupted": _render_interrupted,
     }
 
     def _build_todos_panel(
@@ -433,25 +554,27 @@ class SenpaiApp(App):
         items: list[dict[str, str]],
         *,
         title: str = "todos",
-        border_style: str = "green",
-    ) -> Panel:
-        glyphs = {"completed": "[x]", "in_progress": "[>]", "pending": "[ ]"}
+        accent: str = _BRAND,
+    ) -> Group:
+        glyphs = {"completed": "✓", "in_progress": "▸", "pending": "○"}
         styles = {
-            "completed": "dim green",
-            "in_progress": "bold yellow",
+            "completed": f"dim {_OK}",
+            "in_progress": f"bold {_GOLD}",
             "pending": "white",
         }
         body = Text()
         for i, item in enumerate(items):
             status = item["status"]
-            mark = glyphs.get(status, "[?]")
+            mark = glyphs.get(status, "?")
             label = item["activeForm"] if status == "in_progress" else item["content"]
             if i:
                 body.append("\n")
-            body.append(f"{mark} {label}", style=styles.get(status, ""))
+            body.append(f"{mark}  {label}", style=styles.get(status, ""))
         done = sum(1 for t in items if t["status"] == "completed")
-        body.append(f"\n({done}/{len(items)} completed)", style="dim")
-        return Panel(body, title=title, title_align="left", border_style=border_style)
+        header = Text()
+        header.append(title, style=f"bold {accent}")
+        header.append(f"   {done}/{len(items)}", style="dim")
+        return _block("✦", accent, header, body)
 
     def _refresh_todos(self) -> None:
         """Repaint the docked todos panel from state.TODO.
@@ -475,7 +598,7 @@ class SenpaiApp(App):
             if signature != self._archived_todo_signature:
                 self._write(
                     self._build_todos_panel(
-                        items, title="todos · all done", border_style="green"
+                        items, title="todos · all done", accent=_OK
                     )
                 )
                 self._archived_todo_signature = signature
@@ -494,28 +617,27 @@ class SenpaiApp(App):
         snapshot: list[tuple[str, str, str]],
         *,
         title: str = "background",
-        border_style: str = "yellow",
-    ) -> Panel:
-        glyphs = {"running": "[•]", "completed": "[x]", "error": "[!]"}
+        accent: str = _BRAND,
+    ) -> Group:
+        glyphs = {"running": "●", "completed": "✓", "error": "✕"}
         styles = {
-            "running": "bold yellow",
-            "completed": "dim green",
+            "running": f"bold {_GOLD}",
+            "completed": f"dim {_OK}",
             "error": "bold red",
         }
         body = Text()
         for i, (tid, status, command) in enumerate(snapshot):
-            mark = glyphs.get(status, "[?]")
+            mark = glyphs.get(status, "?")
             cmd = command if len(command) <= 70 else command[:67] + "..."
             if i:
                 body.append("\n")
-            body.append(f"{mark} {tid}  ", style=styles.get(status, ""))
+            body.append(f"{mark}  {tid}  ", style=styles.get(status, ""))
             body.append(cmd, style="white")
         running = sum(1 for _, s, _ in snapshot if s == "running")
-        body.append(
-            f"\n({running} running / {len(snapshot)} total)",
-            style="dim",
-        )
-        return Panel(body, title=title, title_align="left", border_style=border_style)
+        header = Text()
+        header.append(title, style=f"bold {accent}")
+        header.append(f"   {running} running · {len(snapshot)} total", style="dim")
+        return _block("◆", accent, header, body)
 
     def _refresh_bg(self) -> None:
         """Repaint the docked background-tasks panel from state.BG.
@@ -551,7 +673,7 @@ class SenpaiApp(App):
                     self._build_bg_panel(
                         snapshot,
                         title="background · all done",
-                        border_style="green",
+                        accent=_OK,
                     )
                 )
                 self._archived_bg_signature = signature
@@ -575,7 +697,6 @@ class SenpaiApp(App):
         skill = state.SKILLS.skills.get(name)
         if skill:
             self._active_skills.add(name)
-            # description = str(skill.get("meta", {}).get("description", "")).strip() or "(no description)"
             description = str(skill.get("description", {})).strip() or "(no description)"
             available = True
         else:
@@ -585,24 +706,18 @@ class SenpaiApp(App):
             )
             available = False
 
-        border = "magenta" if available else "red"
+        accent = _GOLD if available else "red"
         # Single-width glyphs only — wide emojis (📚, ❓) measure as
         # 2 cells in some fonts and 1 in others, which corrupts the
         # surrounding line layout. See module docstring.
-        title_glyph = "✦" if available else "✕"
-        title = f"[bold {border}]{title_glyph} skill {'loaded' if available else 'NOT FOUND'}[/]"
-        body = Text.assemble(
-            (name, "bold"),
-            (f"\n{description}", "dim"),
-        )
-        self._write(
-            Panel(
-                body,
-                title=title,
-                title_align="left",
-                border_style=border,
-            )
-        )
+        glyph = "✦" if available else "✕"
+        label = "skill loaded" if available else "skill NOT FOUND"
+        header = Text()
+        header.append(label, style=f"bold {accent}")
+        header.append("   ")
+        header.append(name, style="bold")
+        body = Text(description, style="dim")
+        self._write(_block(glyph, accent, header, body))
 
     @staticmethod
     def _status_label_for(event: dict[str, Any]) -> str:
@@ -628,27 +743,29 @@ class SenpaiApp(App):
         if kind == "wait":
             seconds = event.get("seconds", "?")
             return f"sleeping {seconds}s…"
+        if kind == "interrupted":
+            return "stopping…"
         return "thinking"
 
     def _write_turn_footer(self, result: CycleResult) -> None:
         usage = result.usage or {}
         skill_suffix = (
-            f"  · skills: {', '.join(sorted(self._active_skills))}"
+            f"   skills · {', '.join(sorted(self._active_skills))}"
             if self._active_skills
             else ""
         )
         self._write(
             Text.assemble(
-                (f"\n#{self.turn_no}  ", "dim"),
-                (f"stop={result.stop_reason}  ", "bold"),
-                (f"iters={result.iterations}  ", ""),
+                ("\n  ── ", "dim"),
+                (f"#{self.turn_no}  ", f"bold {_BRAND}"),
+                (f"stop={result.stop_reason}", "dim"),
+                (f"   iters {result.iterations}", "dim"),
                 (
-                    f"tok in={usage.get('input_tokens', 0)} "
-                    f"out={usage.get('output_tokens', 0)}  ",
+                    f"   tok in {usage.get('input_tokens', 0)} · out {usage.get('output_tokens', 0)}",
                     "dim",
                 ),
-                (f"[{self._model_label}]", "cyan"),
-                (skill_suffix, "magenta"),
+                (f"   {self._model_label}", "dim"),
+                (skill_suffix, "dim"),
             )
         )
 
@@ -682,7 +799,13 @@ class SenpaiApp(App):
             slash_handler(self)
             return
 
-        self._write(Text.assemble(("> ", "bold magenta"), (text, "")))
+        self._write(Text(""))
+        echo = Text()
+        echo.append("▎ ", style=f"bold {_BRAND}")
+        echo.append("> ", style=f"bold {_BRAND}")
+        echo.append(text, style="bold white")
+        self._write(echo)
+        self._write(Text(""))
         self.turn_no += 1
         self._set_busy(True)
         self.run_worker(
@@ -695,7 +818,8 @@ class SenpaiApp(App):
     # ----- slash-command handlers ------------------------------------------
 
     def _cmd_help(self) -> None:
-        self._write(Panel(HELP_TEXT, border_style="dim"))
+        header = Text("commands", style=f"bold {_BRAND}")
+        self._write(_block("✦", _BRAND, header, Text.from_markup(HELP_TEXT)))
 
     def _cmd_clear(self) -> None:
         self.action_clear_history()
@@ -704,15 +828,18 @@ class SenpaiApp(App):
         self._compact_history()
 
     def _cmd_tasks(self) -> None:
-        self._write(Panel(state.TASK_MGR.list_all(), border_style="dim"))
+        header = Text("tasks", style=f"bold {_ACCENT}")
+        self._write(_block("✦", _ACCENT, header, Text(state.TASK_MGR.list_all())))
 
     def _cmd_team(self) -> None:
-        self._write(Panel(state.get_team().list_all(), border_style="dim"))
+        header = Text("team", style=f"bold {_ACCENT}")
+        self._write(_block("✦", _ACCENT, header, Text(state.get_team().list_all())))
 
     def _cmd_inbox(self) -> None:
         inbox = state.BUS.read_inbox(state.LEAD_NAME)
         body = json.dumps(inbox, indent=2) if inbox else "(empty)"
-        self._write(Panel(body, border_style="dim"))
+        header = Text("inbox", style=f"bold {_ACCENT}")
+        self._write(_block("✦", _ACCENT, header, Text(body)))
 
     _SLASH_COMMANDS: dict[str, Callable[[SenpaiApp], None]] = {
         "/help": _cmd_help,
@@ -742,12 +869,42 @@ class SenpaiApp(App):
     def action_clear_history(self) -> None:
         if self._busy:
             return
+        # Reset conversation state.
         self.messages.clear()
         self.turn_no = 0
+        # Per-session UI bookkeeping that should not bleed across a reset.
+        self._suppressed_tool_ids.clear()
+        self._active_skills.clear()
+        self._archived_todo_signature = None
+        self._archived_bg_signature = None
+        self._last_bg_signature = None
+        # Wipe the scrolling log, then re-paint the intro so the screen
+        # isn't blank. Refresh the docked panels in case TODO/BG state is
+        # still live from a prior turn.
+        self.query_one("#log", RichLog).clear()
+        self._paint_welcome()
         self._write(
             Text(
                 "history cleared. next turn will re-read short_memory.md",
                 style="dim",
+            )
+        )
+        self._refresh_todos()
+        self._refresh_bg()
+
+    def action_interrupt(self) -> None:
+        """Esc — cooperatively cancel the in-flight agent turn. The agent
+        checks the flag at iteration boundaries, so the current LLM call
+        finishes before we return; further iterations / tool dispatch are
+        skipped. No-op when idle."""
+        if not self._busy:
+            return
+        self.agent.request_interrupt()
+        self._status_label = "interrupting…"
+        self._write(
+            Text(
+                "⏼  interrupt requested — stopping after the current step",
+                style=f"bold {_GOLD}",
             )
         )
 
