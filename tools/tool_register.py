@@ -1,7 +1,7 @@
 # register all agent tool here
 from typing import Any, Callable
 
-from tools import bash, http_request, read_file, update_short_memory, wait, write_file
+from tools import bash, http_request, read_file, update_short_memory, wait, write_file, execute_sql
 
 
 SYS_TOOL_PROMPT = """
@@ -10,8 +10,13 @@ machine:
 
 - read_file: read the contents of a local text file.
 - write_file: create or overwrite a local file with the given content.
+  Missing parent directories are created automatically.
 - bash: run a shell command and capture its stdout, stderr, and exit code.
+  Commands are killed after a 30-second default timeout.
 - http_request: send an HTTP request and return the response.
+- execute_sql: run a single SQL statement against the agent's PostgreSQL
+  database; each call is wrapped in a transaction that rolls back on
+  failure. Apply LIMIT 100 to exploratory SELECTs.
 - update_short_memory: overwrite your short_memory.md scratchpad (kept under 3000 tokens).
 - wait: end this cycle and sleep until the next tick (no arguments).
 
@@ -29,6 +34,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     write_file.SPEC,
     bash.SPEC,
     http_request.SPEC,
+    execute_sql.SPEC,
     update_short_memory.SPEC,
     wait.SPEC,
 ]
@@ -38,6 +44,7 @@ TOOL_HANDLERS: dict[str, Callable[..., str]] = {
     write_file.SPEC["name"]: write_file.write_file,
     bash.SPEC["name"]: bash.bash,
     http_request.SPEC["name"]: http_request.http_request,
+    execute_sql.SPEC["name"]: execute_sql.execute_sql,
     update_short_memory.SPEC["name"]: update_short_memory.update_short_memory,
     wait.SPEC["name"]: wait.wait,
 }
