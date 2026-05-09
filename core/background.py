@@ -11,6 +11,7 @@ so a "lookup-then-update" sequence is atomic.
 """
 from __future__ import annotations
 
+import queue
 import subprocess
 import threading
 import uuid
@@ -104,6 +105,9 @@ class BackgroundManager:
 
     def drain(self) -> list[dict[str, Any]]:
         notifs: list[dict[str, Any]] = []
-        while not self.notifications.empty():
-            notifs.append(self.notifications.get_nowait())
+        try:
+            while True:
+                notifs.append(self.notifications.get_nowait())
+        except queue.Empty:
+            pass
         return notifs

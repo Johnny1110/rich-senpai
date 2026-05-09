@@ -17,25 +17,23 @@ from core.llm import (
     ToolResultBlock,
     ToolUseBlock,
 )
-from tools import bash as bash_tool
-from tools import edit_file as edit_file_tool
-from tools import read_file as read_file_tool
-from tools import write_file as write_file_tool
+from tools import (
+    bash as bash_tool,
+    edit_file as edit_file_tool,
+    read_file as read_file_tool,
+    write_file as write_file_tool,
+)
 
 
-_EXPLORE_TOOLS = [bash_tool.SPEC, read_file_tool.SPEC]
-_GENERAL_TOOLS = [
-    bash_tool.SPEC,
-    read_file_tool.SPEC,
-    write_file_tool.SPEC,
-    edit_file_tool.SPEC,
-]
+_EXPLORE_MODULES = (bash_tool, read_file_tool)
+_GENERAL_MODULES = (bash_tool, read_file_tool, write_file_tool, edit_file_tool)
+
+_EXPLORE_TOOLS = [m.SPEC for m in _EXPLORE_MODULES]
+_GENERAL_TOOLS = [m.SPEC for m in _GENERAL_MODULES]
 
 _HANDLERS = {
-    bash_tool.SPEC["name"]: bash_tool.bash,
-    read_file_tool.SPEC["name"]: read_file_tool.read_file,
-    write_file_tool.SPEC["name"]: write_file_tool.write_file,
-    edit_file_tool.SPEC["name"]: edit_file_tool.edit_file,
+    m.SPEC["name"]: getattr(m, m.__name__.rsplit(".", 1)[-1])
+    for m in _GENERAL_MODULES
 }
 
 

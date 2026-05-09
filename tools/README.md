@@ -1,61 +1,47 @@
-# Agent Tools
+# Agent tools
 
-<br>
+This package holds every tool the lead agent can call. Each tool lives in
+its own module so a code reviewer can read one screen and understand one
+tool. `tool_register.py` glues them together.
 
----
+## Module contract
 
-<br>
+Every tool module must export:
 
-## What is this package?
+* `SPEC` — an Anthropic-shaped tool spec:
 
-* `tool_register.py`: Registers all agent tools in a single map and dispatches calls by name. Exposes `SYS_TOOL_PROMPT`, `TOOL_SPECS` (Anthropic tool-spec format), `TOOL_HANDLERS`, and `call_tool(name, arguments)`.
+  ```python
+  SPEC = {
+      "name": "<public tool name>",
+      "description": "<one-paragraph guidance for the model>",
+      "input_schema": { ... JSON schema ... },
+  }
+  ```
 
-* `read_file.py`: Reads a local text file and returns its contents. Handles missing files, non-regular paths, and decoding errors.
+* A top-level callable whose attribute name matches the module's filename
+  (e.g. `tools/read_file.py` exports `def read_file(...) -> str`). The
+  return value should be a string the agent will read directly.
 
-* `write_file.py`: Creates or overwrites a local file with the given content. Missing parent directories are created automatically.
+There is no per-module registration call — `tool_register.py` discovers
+handlers by convention.
 
-* `bash.py`: Executes a shell command via `/bin/bash` with a 30-second default timeout and optional `cwd`, returning exit code, stdout, and stderr.
+## Adding a new tool
 
-* `http_request.py`: Sends an HTTP request (GET/POST/PUT/PATCH/DELETE) with optional headers and a JSON or text body, returning status, headers, and response body.
+1. Create `tools/<your_tool>.py`.
+2. Define `SPEC` and a handler function with the matching name.
+3. Add the module to the right group in `tool_register.TOOL_GROUPS`.
 
-* `execute_sql.py`: Thin wrapper over `db_operations.execute_sql` — runs a single SQL statement against the agent's PostgreSQL database with per-call transaction rollback, optional read-only enforcement, and a pooled connection.
-
-<br>
-
----
-
-<br>
-
-## How tools are registered
-
-Each tool module exports two things:
-
-* `SPEC` — an Anthropic tool spec dict: `{ "name", "description", "input_schema" }`.
-* A handler function whose signature matches the `input_schema`.
-
-`tool_register.py` imports every tool module and wires them into:
-
-* `TOOL_SPECS: list[dict]` — pass directly as `tools=` to `client.messages.create`.
-* `TOOL_HANDLERS: dict[str, Callable]` — name → handler.
-* `call_tool(name, arguments)` — dispatches a tool call, returning the handler's string output (or an error string for unknown tools / invalid arguments).
-
-To add a new tool: create `tools/<your_tool>.py` with a `SPEC` and a handler, then append both to `TOOL_SPECS` and `TOOL_HANDLERS` in `tool_register.py`.
-
-<br>
-
----
-
-<br>
+`TOOL_SPECS`, `TOOL_HANDLERS`, and `call_tool()` pick it up automatically —
+no other edits required.
 
 ## Usage
 
 ```python
 from tools import tool_register
 
-# Pass to the Anthropic API
-client.messages.create(
-    model="claude-opus-4-7",
-    system=tool_register.SYS_TOOL_PROMPT,
+# Pass straight to the LLM client
+client.create_message(
+    system=...,
     tools=tool_register.TOOL_SPECS,
     messages=[...],
 )
@@ -64,15 +50,9 @@ client.messages.create(
 result = tool_register.call_tool("read_file", {"path": "main.py"})
 ```
 
-<br>
+## Tool index
 
----
-
-<br>
-
-## Module spec
-
-The agent core that consumes these tools is specified under
-[`.claude/spec/agent-core/`](../.claude/spec/agent-core/). See `SPEC.md` for
-the public interface, `PLAN.md` for phased work, and `PROGRESS.md` for
-current status.
+Run `python -c "from tools.tool_register import TOOL_GROUPS; \
+import json; \
+print(json.dumps({g: [m.SPEC['name'] for m in mods] for g, mods in TOOL_GROUPS.items()}, indent=2))"`
+to see the live grouping.

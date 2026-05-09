@@ -25,52 +25,34 @@ from core.llm import (
 )
 from core.messaging import MessageBus
 from core.tasks_file import TaskManager
-from tools import bash as bash_tool
-from tools import edit_file as edit_file_tool
-from tools import read_file as read_file_tool
-from tools import write_file as write_file_tool
+from tools import (
+    bash as bash_tool,
+    claim_task as claim_task_tool,
+    edit_file as edit_file_tool,
+    idle as idle_tool,
+    read_file as read_file_tool,
+    send_message as send_message_tool,
+    write_file as write_file_tool,
+)
 
 
-_TEAMMATE_TOOLS = [
-    bash_tool.SPEC,
-    read_file_tool.SPEC,
-    write_file_tool.SPEC,
-    edit_file_tool.SPEC,
-    {
-        "name": "send_message",
-        "description": "Send a message to another teammate or the lead.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "to": {"type": "string"},
-                "content": {"type": "string"},
-            },
-            "required": ["to", "content"],
-        },
-    },
-    {
-        "name": "idle",
-        "description": "Signal you have no more work and should idle.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "claim_task",
-        "description": "Claim a pending task by id.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"task_id": {"type": "integer"}},
-            "required": ["task_id"],
-        },
-    },
-]
-
+# Filesystem / shell tools the teammate can call directly through
+# `_FS_HANDLERS`. Messaging and task-board tools are dispatched manually
+# in `_dispatch` so they can be scoped to the teammate's identity rather
+# than the lead.
+_FS_TOOL_MODULES = (bash_tool, read_file_tool, write_file_tool, edit_file_tool)
 
 _FS_HANDLERS = {
-    bash_tool.SPEC["name"]: bash_tool.bash,
-    read_file_tool.SPEC["name"]: read_file_tool.read_file,
-    write_file_tool.SPEC["name"]: write_file_tool.write_file,
-    edit_file_tool.SPEC["name"]: edit_file_tool.edit_file,
+    m.SPEC["name"]: getattr(m, m.__name__.rsplit(".", 1)[-1])
+    for m in _FS_TOOL_MODULES
 }
+
+_TEAMMATE_TOOLS = [
+    *(m.SPEC for m in _FS_TOOL_MODULES),
+    send_message_tool.SPEC,
+    idle_tool.SPEC,
+    claim_task_tool.SPEC,
+]
 
 
 class TeammateManager:
