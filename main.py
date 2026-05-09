@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from tui import main
+from session_tui.tui import main
 
 
 if __name__ == "__main__":

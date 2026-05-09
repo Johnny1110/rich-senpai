@@ -1,6 +1,5 @@
 # execute_sql tool — thin wrapper exposing db_operations.execute_sql to the agent.
-import db_operations
-
+from db import db_operations
 
 SPEC = {
     "name": "execute_sql",
