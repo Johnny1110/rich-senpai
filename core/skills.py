@@ -18,41 +18,54 @@ class SkillLoader:
     def __init__(self, skills_dir: Path) -> None:
         self.skills_dir = skills_dir
         self.skills_dir.mkdir(parents=True, exist_ok=True)
-        self.skills: dict[str, dict[str, object]] = {}
+
+        self.skills: dict[str, dict[str, str]] = {}
+
         self._scan()
 
     def _scan(self) -> None:
+        self.skills.clear()
+
         if not self.skills_dir.exists():
+            print(f"[warn] skills dir {self.skills_dir} does not exist")
             return
-        for f in sorted(self.skills_dir.rglob("SKILL.md")):
-            text = f.read_text(encoding="utf-8")
-            match = _FRONTMATTER_RE.match(text)
-            meta: dict[str, str] = {}
-            body = text
-            if match:
-                for line in match.group(1).strip().splitlines():
-                    if ":" in line:
-                        k, v = line.split(":", 1)
-                        meta[k.strip()] = v.strip()
-                body = match.group(2).strip()
-            name = meta.get("name", f.parent.name)
-            self.skills[name] = {"meta": meta, "body": body, "path": str(f)}
+
+        for skill_file in sorted(self.skills_dir.rglob("SKILL.md")):
+            body = skill_file.read_text(encoding="utf-8").strip()
+
+            lines = body.splitlines()
+
+            desc = lines[0].strip() if lines else ""
+
+            skill_name = skill_file.parent.name
+
+            self.skills[skill_name] = {
+                "desc": desc,
+                "body": body,
+                "path": str(skill_file),
+            }
 
     def reload(self) -> None:
-        self.skills.clear()
         self._scan()
 
     def descriptions(self) -> str:
         if not self.skills:
             return "(no skills)"
+
         return "\n".join(
-            f"  - {n}: {s['meta'].get('description', '-')}"
-            for n, s in self.skills.items()
+            f"  - {name}: {skill['desc']}"
+            for name, skill in self.skills.items()
         )
 
     def load(self, name: str) -> str:
-        s = self.skills.get(name)
-        if not s:
-            available = ", ".join(self.skills.keys()) or "(none)"
+        skill = self.skills.get(name)
+
+        if not skill:
+            available = ", ".join(sorted(self.skills.keys())) or "(none)"
             return f"error: unknown skill '{name}'. Available: {available}"
-        return f"<skill name=\"{name}\">\n{s['body']}\n</skill>"
+
+        return (
+            f"<skill name=\"{name}\">\n"
+            f"{skill['body']}\n"
+            f"</skill>"
+        )

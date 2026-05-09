@@ -166,12 +166,59 @@ class AgentCore:
         messages[:] = auto_compact(messages, llm=self.llm, system=self.system_prompt)
 
     def _maybe_add_load_skill_prompt(self, user_input: str) -> str:
-        if not user_input.startswith("/"):
+        """If the user starts the message with `/<skill-name>`, look up that
+        skill in `state.SKILLS` and inject its body directly into the user
+        message so the model has the skill content in context before it
+        replies. Doing this client-side (instead of relying on the model to
+        call the load_skill tool) makes the skill load deterministic.
+
+        Examples:
+          "/commit"            -> "<skill name='commit'>...</skill>\\n"
+          "/commit fix typo"   -> "<skill name='commit'>...</skill>\\n\\nfix typo"
+          "/unknown anything"  -> unchanged (no matching skill registered)
+          "ordinary message"   -> unchanged
+        """
+        stripped = user_input.lstrip()
+        if not stripped.startswith("/"):
             return user_input
-        skill_name = user_input.split()[1]
-        if skill_name not in tool_register.TOOL_SPECS:
+
+        # Pull the first token after the leading slash.
+        head, _, tail = stripped[1:].partition(" ")
+        skill_name = head.strip()
+        if not skill_name:
             return user_input
-        return f"{user_input}\n\n<load-skill>{skill_name}</load-skill>"
+
+        skill = state.SKILLS.skills.get(skill_name)
+        if skill is None:
+            # Not a known skill — leave the slash command alone (might be
+            # something else, e.g. a typo the user can re-issue).
+            return user_input
+
+        body = str(skill.get("body", "")).strip()
+        rest = tail.strip()
+        # Surface the load through the same event channel the load_skill
+        # tool uses, so the TUI's skill-loaded banner fires.
+        self._emit({
+            "type": "tool_use",
+            "iteration": -1,
+            "id": f"sk_{skill_name}",
+            "name": "load_skill",
+            "input": {"name": skill_name},
+        })
+        # Mark the matching tool_result as suppressed by emitting a fake
+        # one with a dummy id so the TUI can correlate.
+        self._emit({
+            "type": "tool_result",
+            "iteration": -1,
+            "id": f"sk_{skill_name}",
+            "name": "load_skill",
+            "output": "(loaded client-side)",
+        })
+
+        injected = f"<skill name=\"{skill_name}\">\n{body}\n</skill>"
+        if rest:
+            return f"{injected}\n\n{rest}"
+        return injected
 
     # ----- public API --------------------------------------------------------
 

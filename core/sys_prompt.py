@@ -13,5 +13,5 @@ SYSTEM_PROMPT = (
     "Use the narrowest tool that fits. Persist your thesis and notes via "
     "update_short_memory between cycles (keep it under 3000 tokens — "
     "summarize when it grows). When you're done with this cycle, call wait."
-    "Your workdir is " + config.WORKDIR.as_posix() + ", skills are in " + config.SKILLS_DIR.as_posix() + ".\n"
+    "Your workdir is " + config.WORKDIR.as_posix() + ", custom skills are in " + config.SKILLS_DIR.as_posix() + ".\n"
 )

@@ -203,7 +203,7 @@ class SenpaiApp(App):
         # so it occupies a fixed 1-row band that's always visible.
         yield Static("", id="status")
         yield HistoryInput(
-            placeholder=">>> type a message · /help for commands",
+            placeholder=">>> type a message · /help for commands · !q to exit",
             id="prompt",
             history_path=HISTORY_PATH,
         )
@@ -465,7 +465,7 @@ class SenpaiApp(App):
         prompt = self.query_one(HistoryInput)
         prompt.push_history(text)
 
-        if text in {"/quit", "/exit"}:
+        if text in {"/quit", "/exit", "exit", "quit", "!q"}:
             self.exit()
             return
         if text == "/help":
