@@ -165,6 +165,14 @@ class AgentCore:
         self._emit({"type": "compact", "reason": "auto threshold"})
         messages[:] = auto_compact(messages, llm=self.llm, system=self.system_prompt)
 
+    def _maybe_add_load_skill_prompt(self, user_input: str) -> str:
+        if not user_input.startswith("/"):
+            return user_input
+        skill_name = user_input.split()[1]
+        if skill_name not in tool_register.TOOL_SPECS:
+            return user_input
+        return f"{user_input}\n\n<load-skill>{skill_name}</load-skill>"
+
     # ----- public API --------------------------------------------------------
 
     def run_turn(
@@ -180,6 +188,10 @@ class AgentCore:
         preserved across cycles. No audit logging — callers wanting durable
         per-turn rows should use run_cycle instead.
         """
+
+        # if user input is start with "/{skill-name}"
+        user_input = self._maybe_add_load_skill_prompt(user_input)
+
         if not messages:
             initial = self._build_initial_user_message(user_input)
             messages.append(Message(role="user", content=[TextBlock(text=initial)]))
