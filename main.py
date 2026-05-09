@@ -1,2 +1,4 @@
+from tools import http_request
+
 if __name__ == '__main__':
-    pass
+    http_request.http_request()
