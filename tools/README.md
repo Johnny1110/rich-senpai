@@ -12,11 +12,13 @@
 
 * `read_file.py`: Reads a local text file and returns its contents. Handles missing files, non-regular paths, and decoding errors.
 
-* `write_file.py`: Creates or overwrites a local file with the given content. Requires the parent directory to already exist.
+* `write_file.py`: Creates or overwrites a local file with the given content. Missing parent directories are created automatically.
 
-* `bash.py`: Executes a shell command via `/bin/bash` with a timeout and optional `cwd`, returning exit code, stdout, and stderr.
+* `bash.py`: Executes a shell command via `/bin/bash` with a 30-second default timeout and optional `cwd`, returning exit code, stdout, and stderr.
 
 * `http_request.py`: Sends an HTTP request (GET/POST/PUT/PATCH/DELETE) with optional headers and a JSON or text body, returning status, headers, and response body.
+
+* `execute_sql.py`: Thin wrapper over `db_operations.execute_sql` — runs a single SQL statement against the agent's PostgreSQL database with per-call transaction rollback, optional read-only enforcement, and a pooled connection.
 
 <br>
 

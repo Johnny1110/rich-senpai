@@ -6,8 +6,8 @@ SPEC = {
     "name": "write_file",
     "description": (
         "Create a new file or overwrite an existing one with the provided "
-        "content. Parent directories must already exist. Returns a short "
-        "confirmation string with the number of bytes written."
+        "content. Any missing parent directories are created automatically. "
+        "Returns a short confirmation string with the number of bytes written."
     ),
     "input_schema": {
         "type": "object",
@@ -31,10 +31,9 @@ SPEC = {
 
 
 def write_file(path: str, content: str, encoding: str = "utf-8") -> str:
-    file_path = Path(path)
-    if not file_path.parent.exists():
-        return f"error: parent directory does not exist: {file_path.parent}"
+    file_path = Path(path).expanduser()
     try:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
         bytes_written = file_path.write_text(content, encoding=encoding)
     except OSError as exc:
         return f"error: could not write {path}: {exc}"
