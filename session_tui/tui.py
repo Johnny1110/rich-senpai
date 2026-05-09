@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from rich.console import Group
 from rich.markdown import Markdown
@@ -43,6 +43,7 @@ from core.llm import Message
 
 HISTORY_PATH = Path.home() / ".rich_senpai_history"
 TOOL_RESULT_PREVIEW_CHARS = 800
+_QUIT_ALIASES = frozenset({"/quit", "/exit", "exit", "quit", "!q"})
 
 # Braille spinner frames — 10 frames at 100ms = one revolution per second.
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -181,7 +182,6 @@ class SenpaiApp(App):
     def __init__(self) -> None:
         super().__init__()
         self.agent = AgentCore(on_event=self._on_agent_event)
-        self.agent = AgentCore(on_event=self._on_agent_event)
         self.messages: list[Message] = []
         self.turn_no = 0
         self._busy = False
@@ -310,102 +310,123 @@ class SenpaiApp(App):
 
     def _render_event(self, event: dict[str, Any]) -> None:
         kind = event.get("type")
-        i = event.get("iteration", 0)
         # Reflect the latest progress in the spinner line.
-        self._status_iter = i
+        self._status_iter = event.get("iteration", 0)
         self._status_label = self._status_label_for(event)
-        if kind == "assistant_text":
-            text = event["text"].strip()
-            if not text:
-                return
-            self._write(
-                Panel(
-                    Markdown(text),
-                    title=f"[bold cyan]senpai[/]  [dim]iter {i}[/]",
-                    title_align="left",
-                    border_style="cyan",
-                )
+        renderer = self._EVENT_RENDERERS.get(kind)
+        if renderer is not None:
+            renderer(self, event)
+
+    # ----- per-event renderers ---------------------------------------------
+
+    def _render_assistant_text(self, event: dict[str, Any]) -> None:
+        text = event["text"].strip()
+        if not text:
+            return
+        self._write(
+            Panel(
+                Markdown(text),
+                title=f"[bold cyan]senpai[/]  [dim]iter {event.get('iteration', 0)}[/]",
+                title_align="left",
+                border_style="cyan",
             )
-        elif kind == "tool_use":
-            if event.get("name") == "load_skill":
-                self._render_skill_load(event)
-                # Suppress the matching tool_result — its body is the
-                # entire skill markdown which would dominate the log.
-                tu_id = event.get("id")
-                if tu_id:
-                    self._suppressed_tool_ids.add(tu_id)
-                return
+        )
+
+    def _render_tool_use(self, event: dict[str, Any]) -> None:
+        name = event.get("name")
+        # Special-cased tools have their own surface in the UI; suppress
+        # both the tool_use line in the log and the matching tool_result.
+        if name == "load_skill":
+            self._render_skill_load(event)
+            self._suppress(event.get("id"))
+            return
+        if name == "TodoWrite":
+            # Bottom panel is the canonical view; don't echo to the log.
+            self._suppress(event.get("id"))
+            return
+        args = _format_tool_input(event.get("input") or {})
+        self._write(
+            Text.assemble(
+                ("→ ", "yellow"),
+                ("tool_use ", "bold yellow"),
+                (f"iter {event.get('iteration', 0)}  ", "dim"),
+                (name or "?", "bold"),
+                ("(", "dim"),
+                (args, ""),
+                (")", "dim"),
+            )
+        )
+
+    def _render_tool_result(self, event: dict[str, Any]) -> None:
+        tu_id = event.get("id")
+        if tu_id and tu_id in self._suppressed_tool_ids:
+            self._suppressed_tool_ids.discard(tu_id)
             if event.get("name") == "TodoWrite":
-                # Don't echo TodoWrite to the log — the bottom panel is
-                # the canonical view. Suppress the matching tool_result
-                # too; we refresh the panel when it lands.
-                tu_id = event.get("id")
-                if tu_id:
-                    self._suppressed_tool_ids.add(tu_id)
-                return
-            args = _format_tool_input(event["input"])
-            self._write(
-                Text.assemble(
-                    ("→ ", "yellow"),
-                    ("tool_use ", "bold yellow"),
-                    (f"iter {i}  ", "dim"),
-                    (event["name"], "bold"),
-                    ("(", "dim"),
-                    (args, ""),
-                    (")", "dim"),
-                )
+                self._refresh_todos()
+            return
+        output = _truncate(event["output"], TOOL_RESULT_PREVIEW_CHARS)
+        self._write(
+            Panel(
+                Text(output, style="dim"),
+                title=f"[yellow]tool_result[/]  [dim]iter {event.get('iteration', 0)}[/]",
+                title_align="left",
+                border_style="yellow",
             )
-        elif kind == "tool_result":
-            tu_id = event.get("id")
-            if tu_id and tu_id in self._suppressed_tool_ids:
-                self._suppressed_tool_ids.discard(tu_id)
-                if event.get("name") == "TodoWrite":
-                    self._refresh_todos()
-                return
-            output = _truncate(event["output"], TOOL_RESULT_PREVIEW_CHARS)
-            self._write(
-                Panel(
-                    Text(output, style="dim"),
-                    title=f"[yellow]tool_result[/]  [dim]iter {i}[/]",
-                    title_align="left",
-                    border_style="yellow",
-                )
+        )
+
+    def _render_wait(self, event: dict[str, Any]) -> None:
+        self._write(
+            Text.assemble(
+                ("⏸ ", "yellow"),
+                ("wait", "bold yellow"),
+                (f"  iter {event.get('iteration', 0)} — sleeping {event.get('seconds', '?')}s", "dim"),
             )
-        elif kind == "wait":
-            seconds = event.get("seconds", "?")
-            self._write(
-                Text.assemble(
-                    ("⏸ ", "yellow"),
-                    ("wait", "bold yellow"),
-                    (f"  iter {i} — sleeping {seconds}s", "dim"),
-                )
+        )
+
+    def _render_compact(self, event: dict[str, Any]) -> None:
+        self._write(
+            Text.assemble(
+                ("⌁ ", "magenta"),
+                ("compact", "bold magenta"),
+                (f"  {event.get('reason', '')}", "dim"),
             )
-        elif kind == "compact":
-            self._write(
-                Text.assemble(
-                    ("⌁ ", "magenta"),
-                    ("compact", "bold magenta"),
-                    (f"  {event.get('reason', '')}", "dim"),
-                )
+        )
+
+    def _render_background_drain(self, event: dict[str, Any]) -> None:
+        n = len(event.get("notifications", []))
+        self._write(
+            Text.assemble(
+                ("◇ ", "cyan"),
+                ("background", "bold cyan"),
+                (f"  {n} notification(s) drained", "dim"),
             )
-        elif kind == "background_drain":
-            n = len(event.get("notifications", []))
-            self._write(
-                Text.assemble(
-                    ("◇ ", "cyan"),
-                    ("background", "bold cyan"),
-                    (f"  {n} notification(s) drained", "dim"),
-                )
+        )
+
+    def _render_inbox_drain(self, event: dict[str, Any]) -> None:
+        n = len(event.get("messages", []))
+        self._write(
+            Text.assemble(
+                ("✉ ", "cyan"),
+                ("inbox", "bold cyan"),
+                (f"  {n} message(s) drained", "dim"),
             )
-        elif kind == "inbox_drain":
-            n = len(event.get("messages", []))
-            self._write(
-                Text.assemble(
-                    ("✉ ", "cyan"),
-                    ("inbox", "bold cyan"),
-                    (f"  {n} message(s) drained", "dim"),
-                )
-            )
+        )
+
+    def _suppress(self, tu_id: str | None) -> None:
+        if tu_id:
+            self._suppressed_tool_ids.add(tu_id)
+
+    # Map of agent-event ``type`` -> handler. Adding a new event kind:
+    # write a `_render_<kind>` method and add the entry below.
+    _EVENT_RENDERERS: dict[str, Callable[[SenpaiApp, dict[str, Any]], None]] = {
+        "assistant_text": _render_assistant_text,
+        "tool_use": _render_tool_use,
+        "tool_result": _render_tool_result,
+        "wait": _render_wait,
+        "compact": _render_compact,
+        "background_drain": _render_background_drain,
+        "inbox_drain": _render_inbox_drain,
+    }
 
     def _build_todos_panel(
         self,
@@ -565,7 +586,10 @@ class SenpaiApp(App):
             available = False
 
         border = "magenta" if available else "red"
-        title_glyph = "📚" if available else "❓"
+        # Single-width glyphs only — wide emojis (📚, ❓) measure as
+        # 2 cells in some fonts and 1 in others, which corrupts the
+        # surrounding line layout. See module docstring.
+        title_glyph = "✦" if available else "✕"
         title = f"[bold {border}]{title_glyph} skill {'loaded' if available else 'NOT FOUND'}[/]"
         body = Text.assemble(
             (name, "bold"),
@@ -648,27 +672,14 @@ class SenpaiApp(App):
         prompt = self.query_one(HistoryInput)
         prompt.push_history(text)
 
-        if text in {"/quit", "/exit", "exit", "quit", "!q"}:
+        # Slash commands and quit aliases are local — they never reach
+        # the agent. Anything else is forwarded as the next user turn.
+        if text in _QUIT_ALIASES:
             self.exit()
             return
-        if text == "/help":
-            self._write(Panel(HELP_TEXT, border_style="dim"))
-            return
-        if text == "/clear":
-            self.action_clear_history()
-            return
-        if text == "/compact":
-            self._compact_history()
-            return
-        if text == "/tasks":
-            self._write(Panel(state.TASK_MGR.list_all(), border_style="dim"))
-            return
-        if text == "/team":
-            self._write(Panel(state.get_team().list_all(), border_style="dim"))
-            return
-        if text == "/inbox":
-            inbox = state.BUS.read_inbox(state.LEAD_NAME)
-            self._write(Panel(json.dumps(inbox, indent=2) or "(empty)", border_style="dim"))
+        slash_handler = self._SLASH_COMMANDS.get(text)
+        if slash_handler is not None:
+            slash_handler(self)
             return
 
         self._write(Text.assemble(("> ", "bold magenta"), (text, "")))
@@ -680,6 +691,37 @@ class SenpaiApp(App):
             exclusive=True,
             name="agent_turn",
         )
+
+    # ----- slash-command handlers ------------------------------------------
+
+    def _cmd_help(self) -> None:
+        self._write(Panel(HELP_TEXT, border_style="dim"))
+
+    def _cmd_clear(self) -> None:
+        self.action_clear_history()
+
+    def _cmd_compact(self) -> None:
+        self._compact_history()
+
+    def _cmd_tasks(self) -> None:
+        self._write(Panel(state.TASK_MGR.list_all(), border_style="dim"))
+
+    def _cmd_team(self) -> None:
+        self._write(Panel(state.get_team().list_all(), border_style="dim"))
+
+    def _cmd_inbox(self) -> None:
+        inbox = state.BUS.read_inbox(state.LEAD_NAME)
+        body = json.dumps(inbox, indent=2) if inbox else "(empty)"
+        self._write(Panel(body, border_style="dim"))
+
+    _SLASH_COMMANDS: dict[str, Callable[[SenpaiApp], None]] = {
+        "/help": _cmd_help,
+        "/clear": _cmd_clear,
+        "/compact": _cmd_compact,
+        "/tasks": _cmd_tasks,
+        "/team": _cmd_team,
+        "/inbox": _cmd_inbox,
+    }
 
     def _run_turn_blocking(self, user_input: str) -> None:
         try:

@@ -1,22 +1,29 @@
-"""Agent core
+"""Agent core — one ReAct loop per user turn.
 
-One call to `run_cycle`:
+`AgentCore.run_turn(messages, user_input)` mutates the supplied message
+list in place and returns a `CycleResult`. On the first call (empty
+messages) the user input is wrapped with the short-memory scratchpad;
+later calls just append it raw so prior turns stay in context.
 
-  1. Reads short_memory.md (creates nothing; missing file = empty memory).
-  2. Builds the first user message: optional budget warning + memory + market state.
-  3. Runs the ReAct loop until the model stops asking for tools, calls the
-     synthetic `wait` tool, or `max_iterations` is hit.
-  4. On every exit path — clean *or* exceptional — writes one row to
-     agent_logs via core.audit.log_cycle.
+The loop, per iteration:
 
-The loop also runs the s_full mechanisms before each LLM call:
-microcompact + auto-compact, drain background notifications, drain the
-lead inbox, and at the end of each turn check whether a manual `compress`
-or todo-nag reminder should fire. State for the new managers lives in
-`core.state` so tools/agent core/TUI all share one set of singletons.
+  1. Compaction — `microcompact` collapses old tool results, then
+     `auto_compact` (LLM-summarised) fires if the budget is blown.
+  2. Drain hooks — pending background-task results and inbox messages
+     are appended as user turns so the model sees them next call.
+  3. LLM call — every registered tool is exposed via `tools.tool_register`.
+  4. Tool dispatch — special tools are intercepted (`wait` sleeps and
+     re-iterates; `compress` triggers `auto_compact`); everything else
+     goes through `tool_register.call_tool`.
 
-LLM access goes through `core.llm.LLMClient`. The default is Anthropic, but
-any implementation of that interface can be injected via the `llm` argument.
+Stops when the model returns without tool_use, or when `max_iterations`
+is reached. Stateful managers (todos, background, inbox, skills, tasks,
+team) live as singletons in `core.state` so tools, the loop, and the
+TUI all share one view.
+
+LLM access is provider-neutral: any `core.llm.LLMClient` implementation
+can be injected via the `llm` argument; the default is built from
+`core.config.LLM_PROVIDER`.
 """
 from __future__ import annotations
 
@@ -63,6 +70,19 @@ def _count_tokens(text: str) -> int:
     return len(_TIKTOKEN_ENCODER.encode(text))
 
 
+def _coerce_seconds(raw: Any) -> int:
+    """Validate a ``wait``-tool ``seconds`` argument.
+
+    Falls back to the configured default for unparsable input and clamps
+    the result to ``[1, WAIT_MAX_SECONDS]``.
+    """
+    try:
+        seconds = int(raw) if raw is not None else WAIT_DEFAULT_SECONDS
+    except (TypeError, ValueError):
+        seconds = WAIT_DEFAULT_SECONDS
+    return max(1, min(seconds, WAIT_MAX_SECONDS))
+
+
 @dataclass
 class ToolCall:
     name: str
@@ -80,7 +100,6 @@ class CycleResult:
 
 
 class AgentCore:
-    ## init core parameters
     def __init__(
         self,
         *,
@@ -125,7 +144,7 @@ class AgentCore:
         elif kind == "tool_result":
             print(f"[tool_result {i}]\n{event['output']}\n")
         elif kind == "wait":
-            print(f"[wait] iteration {i}, exiting cycle")
+            print(f"[wait] iteration {i}, sleeping {event.get('seconds', '?')}s")
         elif kind == "compact":
             print(f"[compact] {event.get('reason', '')}")
         elif kind == "background_drain":
@@ -308,10 +327,14 @@ class AgentCore:
         iteration: int,
         tool_calls: list[ToolCall],
     ) -> tuple[list[ToolResultBlock], str | None, bool]:
-        """Run every tool_use block in `blocks`. Returns (results, sentinel,
-        used_todo). Sentinel is 'compress' if that name appears, otherwise
-        None — caller handles the side effect. `wait` is handled inline
-        (sleep + synthetic tool_result) and never sets a sentinel."""
+        """Run every tool_use block in `blocks`.
+
+        Returns ``(results, sentinel, used_todo)`` where ``sentinel`` is
+        ``"compress"`` if that tool was called this turn (the caller
+        runs auto_compact after the user-turn ack) and ``None``
+        otherwise. ``wait`` is handled inline — it sleeps in this thread
+        and emits a synthetic tool_result — and never sets a sentinel.
+        """
         results: list[ToolResultBlock] = []
         sentinel: str | None = None
         used_todo = False
@@ -322,32 +345,7 @@ class AgentCore:
             tool_input = dict(block.input) if block.input else {}
 
             if block.name == "wait":
-                seconds = tool_input.get("seconds", WAIT_DEFAULT_SECONDS)
-                try:
-                    seconds = int(seconds)
-                except (TypeError, ValueError):
-                    seconds = WAIT_DEFAULT_SECONDS
-                seconds = max(1, min(seconds, WAIT_MAX_SECONDS))
-                self._emit({
-                    "type": "wait",
-                    "iteration": iteration,
-                    "id": block.id,
-                    "seconds": seconds,
-                })
-                time.sleep(seconds)
-                output = (
-                    f"slept {seconds}s — re-iterating; pre-LLM hooks will "
-                    f"drain background results / inbox before the next call."
-                )
-                self._emit({
-                    "type": "tool_result",
-                    "iteration": iteration,
-                    "id": block.id,
-                    "name": "wait",
-                    "output": output,
-                })
-                tool_calls.append(ToolCall(block.name, tool_input, output))
-                results.append(ToolResultBlock(tool_use_id=block.id, content=output))
+                self._handle_wait(block, tool_input, iteration, tool_calls, results)
                 continue
 
             self._emit({
@@ -378,6 +376,39 @@ class AgentCore:
                 used_todo = True
 
         return results, sentinel, used_todo
+
+    def _handle_wait(
+        self,
+        block: ToolUseBlock,
+        tool_input: dict[str, Any],
+        iteration: int,
+        tool_calls: list[ToolCall],
+        results: list[ToolResultBlock],
+    ) -> None:
+        """Sleep for the requested duration, then emit a synthetic
+        tool_result so the next iteration's pre-LLM hooks (background /
+        inbox drain) get a chance to land fresh data."""
+        seconds = _coerce_seconds(tool_input.get("seconds"))
+        self._emit({
+            "type": "wait",
+            "iteration": iteration,
+            "id": block.id,
+            "seconds": seconds,
+        })
+        time.sleep(seconds)
+        output = (
+            f"slept {seconds}s — re-iterating; pre-LLM hooks will drain "
+            f"background results / inbox before the next call."
+        )
+        self._emit({
+            "type": "tool_result",
+            "iteration": iteration,
+            "id": block.id,
+            "name": "wait",
+            "output": output,
+        })
+        tool_calls.append(ToolCall(block.name, tool_input, output))
+        results.append(ToolResultBlock(tool_use_id=block.id, content=output))
 
     def _maybe_append_todo_nag(
         self,
