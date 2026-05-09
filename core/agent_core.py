@@ -28,6 +28,7 @@ can be injected via the `llm` argument; the default is built from
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -124,9 +125,19 @@ class AgentCore:
         self.on_event = on_event
         self.token_threshold = token_threshold
         self._rounds_without_todo = 0
+        # Cooperative cancel — set from the UI thread (esc to interrupt),
+        # checked at each ReAct iteration boundary. We can't preempt the
+        # in-flight LLM HTTP call, but we can short-circuit before the
+        # next one or before tool dispatch.
+        self._interrupt = threading.Event()
 
     def close(self) -> None:
         pass
+
+    def request_interrupt(self) -> None:
+        """Signal that the current run_turn should stop at the next safe
+        boundary. Idempotent; cleared automatically when run_turn starts."""
+        self._interrupt.set()
 
     def _emit(self, event: dict[str, Any]) -> None:
         """Forward a structured event to the on_event callback if set,
@@ -247,6 +258,10 @@ class AgentCore:
         # if user input is start with "/{skill-name}"
         user_input = self._maybe_add_load_skill_prompt(user_input)
 
+        # Reset cancel state — a new turn always starts uninterrupted.
+        # request_interrupt() flipped between turns is intentionally ignored.
+        self._interrupt.clear()
+
         if not messages:
             initial = self._build_initial_user_message(user_input)
             messages.append(Message(role="user", content=[TextBlock(text=initial)]))
@@ -259,6 +274,11 @@ class AgentCore:
         total_out = 0
 
         for i in range(self.max_iterations):
+            if self._interrupt.is_set():
+                self._emit({"type": "interrupted", "iteration": i, "stage": "pre_iteration"})
+                return self._result(
+                    final_text_parts, "interrupted", i, tool_calls, total_in, total_out
+                )
             microcompact(messages, keep_recent=1)
             self._maybe_auto_compact(messages)
             self._drain_background(messages)
@@ -296,6 +316,14 @@ class AgentCore:
                     tool_calls,
                     total_in,
                     total_out,
+                )
+
+            # Interrupt requested while the LLM was generating? Skip tool
+            # dispatch — the user wanted us to stop, not run more side effects.
+            if self._interrupt.is_set():
+                self._emit({"type": "interrupted", "iteration": i, "stage": "pre_tool_dispatch"})
+                return self._result(
+                    final_text_parts, "interrupted", i + 1, tool_calls, total_in, total_out
                 )
 
             tool_results, sentinel, used_todo = self._dispatch_tool_uses(
