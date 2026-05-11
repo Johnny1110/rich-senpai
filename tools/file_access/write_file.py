@@ -7,7 +7,7 @@
 # read the prior content; in-place changes should use edit_file anyway).
 from pathlib import Path
 
-from tools._diff import render_new_file_diff
+from tools.file_access._diff import render_new_file_diff
 from tools.tool_result import ToolResult
 
 

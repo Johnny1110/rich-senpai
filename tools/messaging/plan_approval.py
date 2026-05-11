@@ -1,6 +1,6 @@
 # plan_approval — approve or reject a teammate's plan.
 from core import state
-from core.messaging import plan_requests
+from core.unit.team.messaging import plan_requests
 from tools.tool_result import ToolResult
 
 

@@ -22,12 +22,12 @@ from core.llm import (
     ToolResultBlock,
     ToolUseBlock,
 )
-from tools import (
-    bash as bash_tool,
+from tools.file_access import (
     edit_file as edit_file_tool,
     read_file as read_file_tool,
     write_file as write_file_tool,
 )
+from tools.shell import bash as bash_tool
 from tools.tool_result import as_text
 
 

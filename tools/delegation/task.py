@@ -1,6 +1,6 @@
 # task tool — spawn a subagent to do isolated exploration or work.
 from core import state
-from core.subagent import run_subagent
+from core.unit.subagent import run_subagent
 from tools.tool_result import ToolResult
 
 

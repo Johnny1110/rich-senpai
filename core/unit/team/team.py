@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from core import config
-from core.compaction import auto_compact, estimate_tokens, microcompact
+from core.unit.agent.compaction import auto_compact, estimate_tokens, microcompact
 from core.config import (
     TEAM_IDLE_TIMEOUT,
     TEAM_MAX_TOKENS,
@@ -34,17 +34,17 @@ from core.llm import (
     ToolUseBlock,
 )
 from core.logging_setup import clip, get_logger
-from core.messaging import MessageBus
-from core.tasks_file import TaskManager
-from tools import (
-    bash as bash_tool,
-    claim_task as claim_task_tool,
+from core.unit.team.messaging import MessageBus
+from core.unit.team.tasks_file import TaskManager
+from tools.file_access import (
     edit_file as edit_file_tool,
-    idle as idle_tool,
     read_file as read_file_tool,
-    send_message as send_message_tool,
     write_file as write_file_tool,
 )
+from tools.memory import idle as idle_tool
+from tools.messaging import send_message as send_message_tool
+from tools.shell import bash as bash_tool
+from tools.task_board import claim_task as claim_task_tool
 from tools.tool_result import as_text
 
 

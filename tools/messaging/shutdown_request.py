@@ -1,6 +1,6 @@
 # shutdown_request — ask a teammate to stop cleanly.
 from core import state
-from core.messaging import new_request_id, shutdown_requests
+from core.unit.team.messaging import new_request_id, shutdown_requests
 from tools.tool_result import ToolResult
 
 

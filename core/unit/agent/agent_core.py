@@ -43,7 +43,7 @@ from typing import Any, Callable
 import tiktoken
 
 from core import state
-from core.compaction import (
+from core.unit.agent.compaction import (
     auto_compact,
     estimate_tokens,
     microcompact,
@@ -67,7 +67,7 @@ from core.llm import (
     build_default_client,
 )
 from core.logging_setup import clip, get_logger
-from core.sys_prompt import SYSTEM_PROMPT
+from core.unit.agent.sys_prompt import SYSTEM_PROMPT
 from tools import tool_register
 
 
@@ -228,10 +228,10 @@ class AgentCore:
         Without this the registry leaks one entry per shutdown_request
         tool call. Inbox JSON is still surfaced to the model verbatim
         — this only manages the lead-side bookkeeping."""
-        # Local import — `core.messaging` is already imported transitively
-        # via `core.state.BUS`; importing here keeps the dependency arrow
-        # one-directional and avoids a top-level cycle.
-        from core.messaging import shutdown_requests
+        # Local import — `core.unit.team.messaging` is already imported
+        # transitively via `core.state.BUS`; importing here keeps the
+        # dependency arrow one-directional and avoids a top-level cycle.
+        from core.unit.team.messaging import shutdown_requests
         for msg in inbox:
             if msg.get("type") != "shutdown_response":
                 continue

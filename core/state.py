@@ -23,13 +23,9 @@ get_llm() on demand.
 from __future__ import annotations
 
 from core import config
-from core.background import BackgroundManager
 from core.llm import LLMClient
-from core.messaging import MessageBus
-from core.skills import SkillLoader
-from core.tasks_file import TaskManager
-from core.team import TeammateManager
-from core.todos import TodoManager
+from core.unit.manager import BackgroundManager, SkillLoader, TodoManager
+from core.unit.team import MessageBus, TaskManager, TeammateManager
 
 
 # Re-exported for backwards compatibility with code that still does

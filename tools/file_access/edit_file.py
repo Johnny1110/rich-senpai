@@ -6,7 +6,7 @@
 # and rebuild the hunk against the current line numbers.
 from pathlib import Path
 
-from tools._diff import (
+from tools.file_access._diff import (
     DiffApplyError,
     DiffParseError,
     apply_hunks,

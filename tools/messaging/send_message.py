@@ -1,6 +1,6 @@
 # send_message — send a message to a named teammate.
 from core import state
-from core.messaging import VALID_MSG_TYPES
+from core.unit.team.messaging import VALID_MSG_TYPES
 from tools.tool_result import ToolResult
 
 

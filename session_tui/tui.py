@@ -46,7 +46,7 @@ from textual.timer import Timer
 from textual.widgets import Header, RichLog, Static
 
 from core import AgentCore, CycleResult, state
-from core.compaction import auto_compact
+from core.unit.agent import auto_compact
 from core.llm import Message
 from session_tui import commands
 from session_tui.events import render_event, status_label_for

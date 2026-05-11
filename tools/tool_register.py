@@ -34,34 +34,30 @@ from tools.tool_result import ToolResult, as_text  # re-exported below
 
 log = get_logger(__name__)
 
-from tools import (
-    background_run,
-    bash,
-    broadcast,
-    check_background,
-    claim_task,
+from tools.delegation import list_teammates, spawn_teammate, task
+from tools.file_access import edit_file, grep, read_file, write_file
+from tools.memory import (
     compress,
-    edit_file,
-    grep,
-    http_request,
     idle,
-    list_teammates,
     load_skill,
+    todo_write,
+    update_short_memory,
+    wait,
+)
+from tools.messaging import (
+    broadcast,
     plan_approval,
-    read_file,
     read_inbox,
     send_message,
     shutdown_request,
-    spawn_teammate,
-    task,
+)
+from tools.shell import background_run, bash, check_background, http_request
+from tools.task_board import (
+    claim_task,
     task_create,
     task_get,
     task_list,
     task_update,
-    todo_write,
-    update_short_memory,
-    wait,
-    write_file,
 )
 
 
