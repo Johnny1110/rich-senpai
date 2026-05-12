@@ -135,7 +135,7 @@ Goal: a returning Claude Code user feels at home.
   set. Cycle-scoped, not session-scoped.
 - **`glob` tool** under `tools/file_access/glob.py`: `pattern` + optional
   `path`, returns matching files sorted by mtime (matches Claude Code
-  semantics). Reuse the skip-list from `grep.py`.
+  semantics).
 - **`multi_edit` tool**: list of `(old, new)` pairs applied atomically — all
   must hit, or none do. Avoids "edit twice" round-trips agents do today.
 - **Diff renderer parity**: surface both `--- a/` / `+++ b/` headers and hunk
